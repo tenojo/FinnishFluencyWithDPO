@@ -14,6 +14,8 @@ import time
 import json
 import torch
 from sklearn import metrics
+from trl import DPOConfig, DPOTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 from datasets import DatasetDict, Dataset
 from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
@@ -25,7 +27,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="TurkuNLP/bert-base-finnish-cased-v1",
+        default="Qwen/Qwen3-4B-Instruct-2507",
         help="The pre-trained model from Hugging Face to use as basis: "
         "https://huggingface.co/models"
     )
@@ -108,10 +110,22 @@ if __name__ == "__main__":
     if rank == 0:
         print("Loading model and tokenizer")
 
-    model = AutoModelForSequenceClassification.from_pretrained(
+    quantization_config = None
+    if args.bnb_4bit:
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_storage=torch.bfloat16,
+        )
+        quantization_config = bnb_config
+
+    model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        num_labels=1,
-        torch_dtype=torch.bfloat16,
+        quantization_config=quantization_config,
+        dtype=torch.bfloat16,
         device_map=device,
         # attn_implementation="flash_attention_2",
         )
@@ -124,26 +138,27 @@ if __name__ == "__main__":
     train_batch_size = args.batch_size
     eval_batch_size = args.batch_size
 
-    training_args = TrainingArguments(
+    training_args = DPOConfig(
         output_dir=output_dir,
         overwrite_output_dir=not args.resume,
         # save_strategy="no",  # good for testing
         save_strategy="steps",   # use these if you actually want to save the model
-        save_steps=1000,
+        save_steps=400,
         save_total_limit=4,
         eval_strategy="steps",
-        eval_steps=500,  # compute validation loss every 200 steps
+        eval_steps=200,  # compute validation loss every 200 steps
         learning_rate=1e-5,
         weight_decay=0.01,
         bf16=True,  # use 16-bit floating point precision
         # divide the total training batch size by the number of GCDs for the per-device batch size
         per_device_train_batch_size=train_batch_size // world_size,
         per_device_eval_batch_size=eval_batch_size,
-        max_steps=args.max_steps,
+        #max_steps=args.max_steps,
         dataloader_num_workers=args.num_workers,
         dataloader_pin_memory=True,
         # report_to=["tensorboard"],  # log statistics for tensorboard
         ddp_find_unused_parameters=False,
+        num_train_epochs=1,
     )
 
     # #### Setting up preprocessing of training data
@@ -157,93 +172,28 @@ if __name__ == "__main__":
     # text at the end of each review. We also truncate reviews to a maximum
     # length to avoid excessively long sequences during training.
     # As we have no use for the label, we discard it.
-    def tokenize(ex):
-            return tokenizer(
-                ex['text'],
-                max_length=512,
-                return_tensors='pt',
-                padding='max_length',
-                truncation=True,
-            )
     
 
-    corr_samples = []
-    with open('data/output/TDT_corrupted_shuffle_forms_1.jsonl', 'r') as reader:
+    ds_items = []
+    with open('data/DPO_datasets/news-fi-2019_dpo.jsonl', 'r') as reader:
         for l in reader:
             if len(l) > 0:
-                corr_samples.append(json.loads(l))
-    print("Loaded corrupt samples!")
+                ds_items.append(json.loads(l.strip()))
+    print("Loaded samples!")
 
-    clean_samples = []
-    with open('data/output/TDT_doc_data.jsonl', 'r') as reader:
-        for l in reader:
-            if len(l) > 0:
-                clean_samples.append(json.loads(l))
-    print("Loaded clean samples!")
-
-    #Make clean and corrupted samples compatible
-    for i, x in enumerate(clean_samples):
-        t = {}
-        t['id'] = x['id']
-        t['text'] = x['text']
-        t['score'] = float(1.0)
-        t['corruptions'] = []
-        clean_samples[i] = t
-
-    for i, x in enumerate(corr_samples):
-        t = x
-        t['score'] = float(x['bleurt_score'])
-        corr_samples[i]=t
-    print("Finished formatting!")
-    ds = Dataset.from_list(clean_samples+corr_samples).rename_column("score", "label").train_test_split(test_size=0.2)
-    corr_samples = []
-    del corr_samples
-    clean_samples = []
-    del clean_samples
+    ds = Dataset.from_list(ds_items).train_test_split(test_size=0.2)
+    ds_items = []
+    del ds_items
     print("Dataset created!")
-    # %%
-    def tokenize(ex):
-        return tokenizer(
-            ex['text'],
-            max_length=512,
-            return_tensors='pt',
-            padding='max_length',
-            truncation=True,
-        )
-    print("Moving to tokenization!")
-    ds = ds.map(tokenize, num_proc=training_args.dataloader_num_workers, batch_size=8, batched=True).select_columns(['input_ids', 'attention_mask', 'label'])
-    for x in ds:
-        ds[x].set_format("pt", columns=["input_ids"], output_all_columns=True) 
-    tok_train = ds['train']
-    # We split a small amount of training data as "validation" test
-    # set to keep track of evaluation of the loss on non-training data
-    # during training.  This is purely because computing the loss on
-    # the full evaluation dataset takes much longer.
-    tok_val = ds['test'].train_test_split(test_size=0.1, keep_in_memory=True)['test']
+    ds_train = ds['train']
+    ds_val = ds['test'].train_test_split(test_size=0.5)['test']
 
-    # Metrics for the model
-    def compute_metrics_for_regression(eval_pred):
-        logits, labels = eval_pred
-        labels = labels.reshape(-1, 1)
-
-        mse = metrics.mean_squared_error(labels, logits)
-        rmse = metrics.root_mean_squared_error(labels, logits)
-        mae = metrics.mean_absolute_error(labels, logits)
-        r2 = metrics.r2_score(labels, logits)
-        smape = 1/len(labels) * np.sum(2 * np.abs(logits-labels) / (np.abs(labels) + np.abs(logits))*100)
-
-        return {"mse": mse, "rmse": rmse, "mae": mae, "r2": r2, "smape": smape, 'accuracy':mse}
-
-    collator = data_collator = DataCollatorWithPadding(tokenizer)
-
-    trainer = Trainer(
+    trainer = DPOTrainer(
         model=model,
         args=training_args,
-        tokenizer=tokenizer,
-        data_collator=collator,
-        train_dataset=tok_train,
-        eval_dataset=tok_val,
-        compute_metrics=compute_metrics_for_regression,
+        processing_class=tokenizer,
+        train_dataset=ds['train'],
+        eval_dataset=ds['test'],
     )
 
     trainer.train(resume_from_checkpoint=args.resume)

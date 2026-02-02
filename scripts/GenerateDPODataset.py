@@ -28,11 +28,11 @@ def main(cmd_args):
         if random.randint(0,1) == 0:
             prompt += "Teksti 1: "+x+'\n'
             prompt += "Teksti 2: "+regen_texts[str(i)]+'\n'
-            dpo_dataset.append({"prompt":prompt, "accepted":"Teksti 1", "rejected":"Teksti 2"})
+            dpo_dataset.append({"prompt":prompt, "chosen":"Teksti 1", "rejected":"Teksti 2"})
         else:
             prompt += "Teksti 1: "+regen_texts[str(i)]+'\n'
             prompt += "Teksti 2: "+x+'\n'
-            dpo_dataset.append({"prompt":prompt, "accepted":"Teksti 2", "rejected":"Teksti 1"})
+            dpo_dataset.append({"prompt":prompt, "chosen":"Teksti 2", "rejected":"Teksti 1"})
 
     with open("data/DPO_datasets/"+input_human_dataset[:-6]+"_dpo.jsonl", 'w') as writer:
         for d in dpo_dataset:
