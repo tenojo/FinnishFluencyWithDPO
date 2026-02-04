@@ -19,7 +19,10 @@ def main(cmd_args):
         for l in reader:
             if len(l) > 1:
                 regen_ids_texts.append(json.loads(l.strip()))
-    regen_texts = {x['custom_id'][x['custom_id'].find(".jsonl_")+7:]:x['text'] for x in regen_ids_texts}
+    if regen_ids_texts[0].get('custom_id'):
+        regen_texts = {x['custom_id'][x['custom_id'].find(".jsonl_")+7:]:x['text'] for x in regen_ids_texts}
+    else:
+        regen_texts = {str(i):regen_ids_texts[i]['text'] for i in range(len(regen_ids_texts))}
 
     #prompt = "Tehtäväsi on arvioida suomenkielisten tekstien laatua ja valita kahdesta annetusta tekstistä se, kumpi on laadukkaampi. Vastaa ainoastaan Teksti 1, jos ensimmäinen teksti on parempi, ja Teksti 2, jos toinen teksit on parempi.\n"
     for i, x in enumerate(human_texts):
