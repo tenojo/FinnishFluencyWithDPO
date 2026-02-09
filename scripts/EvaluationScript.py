@@ -13,21 +13,16 @@ import sys
 import time
 import json
 import torch
-from sklearn import metrics
-from trl import DPOConfig, DPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 from datasets import DatasetDict, Dataset
-from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
-                          DataCollatorWithPadding, Trainer,
-                          TrainingArguments)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model",
         type=str,
-        default="Qwen/Qwen3-0.6B",
+        default="Qwen/Qwen3-4B-Instruct-2507",
         help="The pre-trained model from Hugging Face to use as basis: "
         "https://huggingface.co/models"
     )
@@ -37,30 +32,10 @@ if __name__ == "__main__":
         help="The root directory under which model checkpoints are stored.",
     )
     parser.add_argument(
-        "--batch_size",
-        "-b",
-        type=int,
-        default=1,
-        help="Training batch size"
-    )
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=1,
-        help="The number of CPU worker processes to use.",
-    )
-    parser.add_argument(
-        "--resume",
-        default=False,
-        action="store_true",
-        help="If set, continue from a previously interrupted run. "
-        "Otherwise, overwrite existing checkpoints.",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=400,
-        help="The number of training steps.",
+        "--dp",
+        type=str,
+        default="data/DPO_datasets/TDT_doc_data_dpo.jsonl",
+        help="Evaluation dataset path",
     )
     parser.add_argument(
         "--4bit",
@@ -88,21 +63,10 @@ if __name__ == "__main__":
         print(f"No GPU found, using CPU instead. (Rank: {local_rank})")
         device = torch.device("cpu")
 
-    if rank == 0 and args.batch_size % world_size != 0:
-        print(f"ERROR: batch_size={args.batch_size} has to be a multiple of "
-              f"the number of GPUs={world_size}!")
-        sys.exit(1)
-
-    # We also ensure that output paths exist
-    model_name = args.model.replace('/', '_')
-
-    # this is where trained model and checkpoints will go
-    output_dir = os.path.join(args.output_path, model_name)
-
     # #### Loading the model
     # Let's start with getting the appropriate tokenizer.
     start = time.time()
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True, fix_mistral_regex=True)
     tokenizer.pad_token = tokenizer.eos_token
     special_tokens = tokenizer.special_tokens_map
 
@@ -135,31 +99,7 @@ if __name__ == "__main__":
     if rank == 0:
         print(f"Loading model and tokenizer took: {stop-start:.2f} seconds")
 
-    train_batch_size = args.batch_size
-    eval_batch_size = args.batch_size
-
-    training_args = DPOConfig(
-        output_dir=output_dir,
-        overwrite_output_dir=not args.resume,
-        # save_strategy="no",  # good for testing
-        save_strategy="steps",   # use these if you actually want to save the model
-        save_steps=400,
-        save_total_limit=4,
-        eval_strategy="steps",
-        eval_steps=200,  # compute validation loss every 200 steps
-        learning_rate=1e-5,
-        weight_decay=0.01,
-        bf16=True,  # use 16-bit floating point precision
-        # divide the total training batch size by the number of GCDs for the per-device batch size
-        per_device_train_batch_size=train_batch_size // world_size,
-        per_device_eval_batch_size=eval_batch_size,
-        #max_steps=args.max_steps,
-        dataloader_num_workers=args.num_workers,
-        dataloader_pin_memory=True,
-        # report_to=["tensorboard"],  # log statistics for tensorboard
-        ddp_find_unused_parameters=False,
-        num_train_epochs=1,
-    )
+    
 
     # #### Setting up preprocessing of training data
 
@@ -175,32 +115,15 @@ if __name__ == "__main__":
     
 
     ds_items = []
-    with open('data/DPO_datasets/TDT_doc_data_dpo.jsonl', 'r') as reader:
+    with open(args.dp, 'r') as reader:
         for l in reader:
             if len(l) > 0:
                 ds_items.append(json.loads(l.strip()))
     print("Loaded samples!")
 
-    ds = Dataset.from_list(ds_items).train_test_split(test_size=0.2)
+    ds = Dataset.from_list(ds_items)
     ds_items = []
     del ds_items
     print("Dataset created!")
-    ds_train = ds['train']
-    ds_val = ds['test'].train_test_split(test_size=0.5)['test']
-
-    trainer = DPOTrainer(
-        model=model,
-        args=training_args,
-        processing_class=tokenizer,
-        train_dataset=ds['train'],
-        eval_dataset=ds['test'],
-    )
-
-    trainer.train(resume_from_checkpoint=args.resume)
-
-    if trainer.is_fsdp_enabled:
-        trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
-    trainer.save_model(output_dir)
-    if rank == 0:
-        print()
-        print("Training done, you can find the final model (and checkpoints) in", output_dir)
+    for x in ds:
+        print(model(**tokenizer(x['prompt'], return_tensors="pt")))

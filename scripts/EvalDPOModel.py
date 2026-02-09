@@ -15,13 +15,14 @@ def main(cmd_args):
         for l in reader:
             if len(l) > 1:
                 ds_items.append(json.loads(l.strip()))
+    ds_items = ds_items[:25]
 
     prompts = [x['prompt'] for x in ds_items]
 
     outputs = llm.generate(prompts)
     res_d = []
     for i,o in enumerate(outputs):
-        res_d.append({'pos_id':i, 'model_pred':o, 'correct_output':ds_items[i]['chosen'], 'prompt':prompts[i]})
+        res_d.append({'pos_id':i, 'model_pred':o.outputs[0].text, 'correct_output':ds_items[i]['chosen'], 'prompt':prompts[i]})
 
     print("Parsed outputs!")
 
