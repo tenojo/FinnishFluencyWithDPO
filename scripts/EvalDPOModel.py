@@ -15,7 +15,7 @@ def main(cmd_args):
         for l in reader:
             if len(l) > 1:
                 ds_items.append(json.loads(l.strip()))
-    ds_items = ds_items[:25]
+    ds_items = ds_items[-1000:]
 
     prompts = [x['prompt'] for x in ds_items]
 

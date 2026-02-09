@@ -14,7 +14,7 @@ import time
 import json
 import torch
 from sklearn import metrics
-from trl import DPOConfig, DPOTrainer
+from trl import SFTTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 from datasets import DatasetDict, Dataset
@@ -30,11 +30,6 @@ if __name__ == "__main__":
         default="Qwen/Qwen3-4B-Instruct-2507",
         help="The pre-trained model from Hugging Face to use as basis: "
         "https://huggingface.co/models"
-    )
-    parser.add_argument(
-        "--input-path",
-        type=str,
-        help="The root directory under which loaded model checkpoints are stored.",
     )
     parser.add_argument(
         "--output-path",
@@ -128,7 +123,7 @@ if __name__ == "__main__":
         quantization_config = bnb_config
 
     model = AutoModelForCausalLM.from_pretrained(
-        args.input_path+"/"+model_name,
+        args.model,
         quantization_config=quantization_config,
         dtype=torch.bfloat16,
         device_map=device,
@@ -142,30 +137,6 @@ if __name__ == "__main__":
 
     train_batch_size = args.batch_size
     eval_batch_size = args.batch_size
-
-    training_args = DPOConfig(
-        output_dir=output_dir,
-        overwrite_output_dir=not args.resume,
-        # save_strategy="no",  # good for testing
-        save_strategy="steps",   # use these if you actually want to save the model
-        save_steps=400,
-        save_total_limit=4,
-        eval_strategy="steps",
-        eval_steps=200,  # compute validation loss every 200 steps
-        learning_rate=1e-5,
-        weight_decay=0.01,
-        bf16=True,  # use 16-bit floating point precision
-        # divide the total training batch size by the number of GCDs for the per-device batch size
-        per_device_train_batch_size=train_batch_size // world_size,
-        per_device_eval_batch_size=eval_batch_size,
-        #max_steps=args.max_steps,
-        dataloader_num_workers=args.num_workers,
-        dataloader_pin_memory=True,
-        # report_to=["tensorboard"],  # log statistics for tensorboard
-        ddp_find_unused_parameters=False,
-        num_train_epochs=1,
-        loss_type="bco_pair",
-    )
 
     # #### Setting up preprocessing of training data
 
@@ -181,26 +152,21 @@ if __name__ == "__main__":
     
 
     ds_items = []
-    with open('data/DPO_datasets/news-fi-2019_dpo.jsonl', 'r') as reader:
+    with open('data/Pretrain_datasets/TDT_doc_data_dpo.jsonl', 'r') as reader:
         for l in reader:
             if len(l) > 0:
                 ds_items.append(json.loads(l.strip()))
-    #print("Loaded samples!")
-    #Save some for evaluation
-    ds_items = ds_items[:-1000]
-    ds = Dataset.from_list(ds_items).train_test_split(test_size=0.2).shuffle()
+    print("Loaded samples!")
+
+    ds = Dataset.from_list(ds_items).shuffle()
     ds_items = []
     del ds_items
     print("Dataset created!")
-    ds_train = ds['train']
-    ds_val = ds['test'].train_test_split(test_size=0.5)['test']
 
-    trainer = DPOTrainer(
+    trainer = SFTTrainer(
         model=model,
-        args=training_args,
         processing_class=tokenizer,
-        train_dataset=ds['train'],
-        eval_dataset=ds['test'],
+        train_dataset=ds,
     )
 
     trainer.train(resume_from_checkpoint=args.resume)
