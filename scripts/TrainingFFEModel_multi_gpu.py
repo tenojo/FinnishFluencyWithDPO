@@ -107,7 +107,7 @@ if __name__ == "__main__":
     # #### Loading the model
     # Let's start with getting the appropriate tokenizer.
     start = time.time()
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True, model_max_length=32768)
     tokenizer.pad_token = tokenizer.eos_token
     special_tokens = tokenizer.special_tokens_map
 
@@ -149,7 +149,7 @@ if __name__ == "__main__":
         # save_strategy="no",  # good for testing
         save_strategy="steps",   # use these if you actually want to save the model
         save_steps=400,
-        save_total_limit=4,
+        save_total_limit=1,
         eval_strategy="steps",
         eval_steps=200,  # compute validation loss every 200 steps
         learning_rate=1e-5,
@@ -165,6 +165,7 @@ if __name__ == "__main__":
         ddp_find_unused_parameters=False,
         num_train_epochs=1,
         loss_type="bco_pair",
+        #use_liger_kernel=True,
     )
 
     # #### Setting up preprocessing of training data

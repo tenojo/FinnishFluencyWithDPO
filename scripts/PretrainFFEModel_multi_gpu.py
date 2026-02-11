@@ -14,7 +14,7 @@ import time
 import json
 import torch
 from sklearn import metrics
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
 from datasets import DatasetDict, Dataset
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     # #### Loading the model
     # Let's start with getting the appropriate tokenizer.
     start = time.time()
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True, model_max_length=16184)
     tokenizer.pad_token = tokenizer.eos_token
     special_tokens = tokenizer.special_tokens_map
 
@@ -164,6 +164,7 @@ if __name__ == "__main__":
     print("Dataset created!")
 
     trainer = SFTTrainer(
+        #args=SFTConfig(use_liger_kernel=True),
         model=model,
         processing_class=tokenizer,
         train_dataset=ds,
